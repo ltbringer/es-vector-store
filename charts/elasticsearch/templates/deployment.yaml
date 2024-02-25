@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "elasticsearch.fullname" . }}
+  labels:
+    app: {{ include "elasticsearch.name" . }}
+    chart: {{ include "elasticsearch.chart" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "elasticsearch.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "elasticsearch.name" . }}
+    spec:
+      containers:
+      - name: elasticsearch
+        securityContext:
+          runAsUser: 1000
+          fsGroup: 1000
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+          - containerPort: 9200
+            name: http
+            protocol: TCP
+        resources:
+          limits:
+            memory: {{ .Values.resources.memory.max }}
+            cpu: {{ .Values.resources.cpu.max }}
+          requests:
+            memory: {{ .Values.resources.memory.min }}
+            cpu: {{ .Values.resources.cpu.min }}
+        env:
+          - name: ELASTIC_PASSWORD
+            value: {{ .Values.secrets.elasticPassword }}
+          - name: KIBANA_PASSWORD
+            value: {{ .Values.secrets.kibanaPassword }}

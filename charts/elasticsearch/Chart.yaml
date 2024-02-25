@@ -1,0 +1,8 @@
+# At least helm version 3.0.0 is required
+apiVersion: v2 
+version: 0.1.0
+name: elasticsearch
+description: A Helm chart for Elasticsearch
+appVersion: "8.12.1"
+kubeVersion: ">=1.25.0"
+type: application

@@ -1,0 +1,14 @@
+image:
+  repository: docker.elastic.co/elasticsearch/elasticsearch
+  tag: 8.12.1
+  pullPolicy: IfNotPresent
+resources:
+  memory:
+    min: 1Gi
+    max: 2Gi
+  cpu:
+    min: 100m
+    max: 500m
+secrets: 
+  elasticPassword: "19ik9-88191-1k9i-4555-6123q-ae3f"
+  kibanaPassword: "19ik9-88191-1k9i-4555-6123q-ae3f"
