@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "es-vector-store"
+version = "0.1.0"
+description = "A local vector search service using ElasticSearch."
+authors = ["ltbringer <amresh.venugopal@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "es_vector_store"}]
+
+[tool.poetry.dependencies]
+python = ">=3.8.1,<3.12"
+llama-index = "^0.10.6"
+llama-index-vector-stores-elasticsearch = "^0.1.2"
+elasticsearch = "8.12.1"
+pydantic = "^2.6.2"
+toml = "^0.10.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
