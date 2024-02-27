@@ -3,134 +3,55 @@ Code snippet: llama_index
 permalink: https://github.com/run-llama/llama_index/blob/8118a45ea86f0dd391e4838e5423d67849c34955/llama-index-legacy/llama_index/legacy/vector_stores/elasticsearch.py
 """
 
-from typing import Any, ClassVar, List, Mapping, Tuple
-from enum import Enum
+import uuid
+from typing import Any, ClassVar, Generator, List, Mapping, Tuple
 
 from pydantic import (
     BaseModel,
     Field,
     model_validator,
     PrivateAttr,
-    field_validator,
-    ValidationInfo,
 )
 from elasticsearch import Elasticsearch, AsyncElasticsearch
-from es_vector_store.utils.exclusive_args import (
-    is_mutually_exclusive,
-    MutuallyExclusiveStatusCode,
+from elasticsearch import helpers
+from es_vector_store.vendor.schemas import (
+    ConnectionParams,
+    DistanceMetric,
+    VectorIndexOptions,
+    DenseVectorField,
+    KNNQuery,
+    TextQuery,
 )
-from es_vector_store import project
-
-StringOrTuple = str | Tuple[str, str]
 
 
-class ConnectionParams(BaseModel):
-    """
-    Refer to the following for extra_config:
-    - https://github.com/elastic/elasticsearch-py/blob/44c5c6993f67daf2a56d2310e67af6874c4bdc8f/elasticsearch/_sync/client/__init__.py#L99
-    - https://github.com/elastic/elasticsearch-py/blob/44c5c6993f67daf2a56d2310e67af6874c4bdc8f/elasticsearch/_async/client/__init__.py#L99
+def generate_records(
+    data: Generator[Mapping[str, Any], None, None],
+    index_name: str,
+    expected_fields: set,
+):
+    for item in data:
+        input_fields = set(item.keys())
+        extra_fields = input_fields - expected_fields
+        missing_fields = expected_fields - input_fields
 
-    Args:
-        url: The URL of the Elasticsearch cluster.
-        cloud_id: The cloud ID of the Elasticsearch cluster.
-        api_key: The API key to use for authentication.
-        username: The username to use for basic authentication.
-        password: The password to use for basic authentication.
-        extra_config: Full set of parameters to pass to the Elasticsearch client.
-    """
-
-    url: str | None = Field(default=None)
-    cloud_id: str | None = Field(default=None)
-    api_key: StringOrTuple | None = Field(default=None)
-    username: str | None = Field(default=None)
-    password: str | None = Field(default=None, repr=False)
-    extra_config: dict | None = Field(default=None)
-
-    def generate_config(self) -> dict:
-        base_config = ConnectionConfig(
-            hosts=[self.url],
-            cloud_id=self.cloud_id,
-            api_key=self.api_key,
-            basic_auth=(self.username, self.password),
-        ).dict()
-        extra_config = self.extra_config or {}
-        return {**base_config, **extra_config}
-
-
-class ConnectionConfig(BaseModel):
-    hosts: List[str]
-    cloud_id: str | None
-    api_key: StringOrTuple | None
-    basic_auth: StringOrTuple | None = Field(repr=False)
-
-    def dict(self):
-        return self.model_dump()
-
-    @model_validator(mode="after")
-    def validate_url_or_cloud_id(self) -> "ConnectionConfig":
-        url_cloud_id_status = is_mutually_exclusive(self.hosts, self.cloud_id)
-        if url_cloud_id_status == MutuallyExclusiveStatusCode.ALL_NONE:
-            raise ValueError("At least one of url or cloud_id must be set.")
-
-        if url_cloud_id_status == MutuallyExclusiveStatusCode.MULTIPLE_SET:
-            raise ValueError("Only one of url or cloud_id must be set.")
-        return self
-
-
-class DistanceMetric(Enum):
-    COSINE = "cosine"
-    EUCLIDEAN_DISTANCE = "l2_norm"
-    DOT_PRODUCT = "dot_product"
-    MAX_INNER_PRODUCT = "max_inner_product"
-
-
-class VectorIndexType(Enum):
-    HNSW = "hnsw"
-    INT8_HSNW = "int8_hnsw"
-
-
-class VectorIndexOptions(BaseModel):
-    type: VectorIndexType
-    m: int | None = Field(default=None)
-    ef_construction: int | None = Field(default=None)
-    confidence_interval: float | None = Field(default=None)
-
-    @model_validator(mode="after")
-    def confidence_interval_only_when_int8_hsnw(self):
-        using_hnsw_index = self.type == VectorIndexType.HNSW
-        using_confidence_interval = isinstance(self.confidence_interval, float)
-        if using_confidence_interval and using_hnsw_index:
+        if extra_fields:
             raise ValueError(
-                "confidence_interval only works when "
-                f"index type is {VectorIndexType.INT8_HSNW.value}"
+                f"Found extra fields {extra_fields} in the"
+                f" input data only provide {expected_fields}."
             )
-        return self
+        if missing_fields:
+            raise ValueError(
+                f"Missing fields {missing_fields} in "
+                f"the input data provide {expected_fields}."
+            )
 
-    def dict(self):
-        raw_obj = self.model_dump()
-        raw_obj["type"] = self.type.value
-        obj = {k: v for k, v in raw_obj.items() if v is not None}
-        return obj
-
-
-class DenseVectorField(BaseModel):
-    type: str = "dense_vector"
-    dims: int
-    similarity: DistanceMetric
-    index: bool
-    index_options: VectorIndexOptions | None = Field(default=None)
-
-    @model_validator(mode="after")
-    def vector_indexing_and_settings(self):
-        if self.index and self.index_options is None:
-            raise ValueError(f"`index_options` is required when index is True.")
-        return self
-
-    def dict(self):
-        obj = self.model_dump()
-        obj["similarity"] = obj["similarity"].value
-        obj["index_options"] = self.index_options.dict()
-        return obj
+        id_ = uuid.uuid4().hex
+        yield {
+            "_op_type": "index",
+            "_index": index_name,
+            "_id": id_,
+            **item,
+        }
 
 
 class VectorStore(BaseModel):
@@ -150,7 +71,7 @@ class VectorStore(BaseModel):
     """
 
     index: str
-    vector_field: Tuple[str, int]
+    vector_fields: List[Tuple[str, int]]
     enable_vector_index: bool = True
     vector_index_options: VectorIndexOptions | None = Field(default=None)
     distance_metric: DistanceMetric = DistanceMetric.COSINE
@@ -168,26 +89,24 @@ class VectorStore(BaseModel):
             )
         return self
 
-    @field_validator("mappings")
-    def mappings_schema(
-        cls, mappings: Mapping[str, Any], info: ValidationInfo
-    ) -> "VectorStore":
+    @model_validator(mode="after")
+    def mappings_schema(self) -> "VectorStore":
         invalid_mappings_error = (
-            f"Invalid schema because {info.field_name}={mappings}."
-            " Explicit mappings are expected. "
-            "Ref: "
+            f"Invalid schema because mappings={self.mappings}."
+            " Explicit mappings are expected. Ref:"
+            " https://www.elastic.co/guide/en/elasticsearch/reference/current/explicit-mapping.html"
         )
         missing_field_def_error = (
-            f"{info.field_name} must contain at least "
+            f"mappings must contain at least "
             "one field to map the vector to text, url or other metadata."
         )
-        if mappings is None:
+        if not self.mappings:
             raise ValueError(invalid_mappings_error)
 
-        if "properties" not in mappings:
+        if "properties" not in self.mappings:
             raise ValueError(invalid_mappings_error)
 
-        if not mappings["properties"]:
+        if not self.mappings["properties"]:
             raise ValueError(missing_field_def_error)
 
     def __init__(self, **data):
@@ -195,16 +114,25 @@ class VectorStore(BaseModel):
         self._client = self._create_client()
         self._create_index()
 
-    def _create_vector_mapping(self) -> DenseVectorField:
-        _, dimension = self.vector_field
-        return DenseVectorField(
-            dims=dimension,
-            similarity=self.distance_metric,
-            index=self.enable_vector_index,
-            index_options=(
-                self.vector_index_options.dict() if self.enable_vector_index else None
-            ),
-        )
+    def _create_vector_mappings(self) -> List[Mapping[str, DenseVectorField]]:
+        es_vector_fields = []
+        for vector_field in self.vector_fields:
+            vector_field_name, dimension = vector_field
+            es_vector_fields.append(
+                {
+                    vector_field_name: DenseVectorField(
+                        dims=dimension,
+                        similarity=self.distance_metric,
+                        index=self.enable_vector_index,
+                        index_options=(
+                            self.vector_index_options.dict()
+                            if self.enable_vector_index
+                            else None
+                        ),
+                    ).dict()
+                }
+            )
+        return es_vector_fields
 
     def _create_client(self):
         connection_config = self.connection_params.generate_config()
@@ -216,11 +144,25 @@ class VectorStore(BaseModel):
         if self._client.indices.exists(index=self.index):
             print(f"Index {self.index} already exists.")
             return
-        vector_name, _ = self.vector_field
-        vector_mapping = {vector_name: self._create_vector_mapping().dict()}
-        explicit_mapping = {"properties": {**self.mappings, **vector_mapping}}
-
-        import pprint
-
-        pprint.pprint(explicit_mapping)
+        vector_mappings = self._create_vector_mappings()
+        explicit_mapping = self.mappings
+        for vector_mapping in vector_mappings:
+            explicit_mapping["properties"].update(vector_mapping)
         self._client.indices.create(index=self.index, mappings=explicit_mapping)
+
+    def bulk_insert(self, g: Generator[Mapping[str, Any], None, None]):
+        vector_field_names = [vector_field[0] for vector_field in self.vector_fields]
+        other_fields = list(self.mappings["properties"].keys())
+        expected_fields = set(vector_field_names + other_fields)
+        helpers.bulk(self._client, generate_records(g, self.index, expected_fields))
+
+    def search(
+        self, knn_query: KNNQuery | None = None, text_query: TextQuery | None = None
+    ):
+        knn_query_dict = knn_query.dict() if knn_query else {}
+        text_query_dict = text_query.dict() if text_query else {}
+        query = {**knn_query_dict, **text_query_dict}
+        return self._client.search(index=self.index, body=query)
+
+    def drop(self):
+        return self._client.indices.delete(index=self.index)
